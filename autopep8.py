@@ -2039,23 +2039,37 @@ def parse_args(args):
     return options, args
 
 
+_supported_fixes = None
 def supported_fixes():
-    """Yield pep8 error codes that autopep8 fixes.
+    """Returns a dict of pep8 error codes that autopep8 fixes.
 
-    Each item we yield is a tuple of the code followed by its description.
+    The keys are the pep8 error codes (in upper-case) and the values are their
+    descriptions.
 
     """
+
+    global _supported_fixes
+
+    if _supported_fixes is not None:
+        return _supported_fixes
+
+    _supported_fixes = {}
+
     instance = FixPEP8(filename=None, options=None, contents='')
     for attribute in dir(instance):
         code = re.match('fix_([ew][0-9][0-9][0-9])', attribute)
         if code:
-            yield (code.group(1).upper(),
-                   re.sub(r'\s+', ' ',
-                          getattr(instance, attribute).__doc__))
+            code = code.group(1).upper()
+            desc = re.sub(r'\s+', ' ',
+                          getattr(instance, attribute).__doc__)
+            _supported_fixes[code] = desc
 
     for (code, function) in global_fixes():
-        yield (code.upper() + (4 - len(code)) * ' ',
-               re.sub(r'\s+', ' ', function.__doc__))
+        code = code.upper() + (4 - len(code)) * ' '
+        desc = re.sub(r'\s+', ' ', function.__doc__)
+        _supported_fixes[code] = desc
+
+    return _supported_fixes
 
 
 def line_shortening_rank(candidate, newline, indent_word):
@@ -2256,7 +2270,7 @@ def main():
         options, args = parse_args(sys.argv[1:])
 
         if options.list_fixes:
-            for code, description in supported_fixes():
+            for code, description in supported_fixes().items():
                 print('{code} - {description}'.format(
                     code=code, description=description))
             return 0
