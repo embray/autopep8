@@ -66,6 +66,9 @@ except NameError:
 __version__ = '0.8.7'
 
 
+PY3 = sys.version_info[0] >= 3
+
+
 CR = '\r'
 LF = '\n'
 CRLF = '\r\n'
@@ -174,7 +177,7 @@ class FixPEP8(object):
 
     """
 
-    def __init__(self, filename, options, contents=None):
+    def __init__(self, filename, options, contents=None, skipped_fixes=None):
         self.filename = filename
         if contents is None:
             self.source = read_from_filename(filename, readlines=True)
@@ -184,6 +187,11 @@ class FixPEP8(object):
         self.newline = find_newline(self.source)
         self.options = options
         self.indent_word = _get_indentword(unicode().join(self.source))
+
+        if skipped_fixes is None:
+            self.skipped_fixes = set()
+        else:
+            self.skipped_fixes = skipped_fixes
 
         # method definition
         self.fix_e111 = self.fix_e101
@@ -213,7 +221,12 @@ class FixPEP8(object):
             if result['line'] in completed_lines:
                 continue
 
+            skip_key = (result['id'], hash(self.source[result['line'] - 1]))
+            if skip_key in self.skipped_fixes:
+                continue
+
             fixed_methodname = 'fix_%s' % result['id'].lower()
+            old_source = copy.copy(self.source)
             if hasattr(self, fixed_methodname):
                 fix = getattr(self, fixed_methodname)
 
@@ -233,6 +246,14 @@ class FixPEP8(object):
 
                 if modified_lines:
                     completed_lines.update(modified_lines)
+                    if self.options.interactive:
+                        if not select_apply_diff(old_source, self.source,
+                                                 self.filename, result['id']):
+                            self.source = old_source
+                            for line in modified_lines:
+                                skip_key = (result['id'],
+                                            hash(self.source[line - 1]))
+                                self.skipped_fixes.add(skip_key)
                 elif modified_lines == []:  # Empty list means no fix
                     if self.options.verbose >= 2:
                         print(
@@ -241,6 +262,13 @@ class FixPEP8(object):
                             file=sys.stderr)
                 else:  # We assume one-line fix when None
                     completed_lines.add(result['line'])
+                    if self.options.interactive:
+                        if not select_apply_diff(old_source, self.source,
+                                                 self.filename, result['id']):
+                            self.source = old_source
+                            skip_key = (result['id'],
+                                        hash(self.source[result['line'] - 1]))
+                            self.skipped_fixes.add(skip_key)
             else:
                 if self.options.verbose >= 3:
                     print("--->  '%s' is not defined." % fixed_methodname,
@@ -984,11 +1012,18 @@ def _get_indentation(line):
 
 def get_diff_text(old, new, filename):
     """Return text of unified diff between old and new."""
+    if filename:
+        old_filename = 'original/' + filename
+        new_filename = 'fixed/' + filename
+    else:
+        old_filename = 'original.py'
+        new_filename = 'fixed.py'
+
     newline = '\n'
     diff = difflib.unified_diff(
         old, new,
-        'original/' + filename,
-        'fixed/' + filename,
+        old_filename,
+        new_filename,
         lineterm=newline)
 
     text = ''
@@ -1000,6 +1035,35 @@ def get_diff_text(old, new, filename):
             text += newline + r'\ No newline at end of file' + newline
 
     return text
+
+
+def select_apply_diff(old, new, filename='', code=None):
+    if not isinstance(old, basestring):
+        old_lines = ''.join(old).splitlines(True)
+    else:
+        old_lines = old.splitlines(True)
+
+    if not isinstance(new, basestring):
+        new_lines = ''.join(new).splitlines(True)
+    else:
+        new_lines = new.splitlines(True)
+
+    difftext = get_diff_text(old_lines, new_lines, filename)
+
+    if difftext:
+        if code:
+            code = code.upper()
+            print("# Apply the following diff for {0}: {1}?".format(
+                code, supported_fixes()[code]), file=sys.stderr)
+        print(difftext, file=sys.stderr)
+
+        if ask('Apply (y/n)? ') == 'y':
+            return True
+        else:
+            return False
+
+    # No diff between the versions of the text; don't bother
+    return False
 
 
 def _priority_key(pep8_result):
@@ -1841,18 +1905,21 @@ def fix_lines(source_lines, options, filename=''):
     previous_hashes = set([hash(tmp_source)])
 
     # Apply global fixes only once (for efficiency).
-    fixed_source = apply_global_fixes(tmp_source, options)
+    fixed_source = apply_global_fixes(tmp_source, options, filename)
+    skipped_fixes = set()
 
     for _ in range(-1, options.pep8_passes):
         tmp_source = copy.copy(fixed_source)
 
-        fix = FixPEP8(filename, options, contents=tmp_source)
+        fix = FixPEP8(filename, options, contents=tmp_source,
+                      skipped_fixes=skipped_fixes)
         fixed_source = fix.fix()
 
         if hash(fixed_source) in previous_hashes:
             break
         else:
             previous_hashes.add(hash(fixed_source))
+            skipped_fixes = fix.skipped_fixes
 
     return fixed_source
 
@@ -1905,7 +1972,7 @@ def global_fixes():
                 yield (code, function)
 
 
-def apply_global_fixes(source, options):
+def apply_global_fixes(source, options, filename=''):
     """Run global fixes on source code.
 
     Thsese are fixes that only need be done once (unlike those in FixPEP8,
@@ -1917,7 +1984,13 @@ def apply_global_fixes(source, options):
             if options.verbose:
                 print('--->  Applying global fix for {0}'.format(code.upper()),
                       file=sys.stderr)
-            source = function(source)
+            new_source = function(source)
+
+            if options.interactive:
+                if select_apply_diff(source, new_source, filename, code):
+                    source = new_source
+            else:
+                source = new_source
 
     return source
 
@@ -1982,6 +2055,8 @@ def parse_args(args):
     parser.add_option('--max-line-length', metavar='n', default=79, type=int,
                       help='set maximum allowed line length '
                            '(default: %default)')
+    parser.add_option('--interactive', action='store_true',
+                      help='run in interactive mode')
     options, args = parser.parse_args(args)
 
     if not len(args) and not options.list_fixes:
@@ -2071,6 +2146,18 @@ def supported_fixes():
         _supported_fixes[code] = desc
 
     return _supported_fixes
+
+def ask(question, answers=('y', 'n')):
+    """Prompt user for input--outputs the prompt on stderr."""
+
+    response = ''
+    while response.lower() not in answers:
+        sys.stderr.write(question)
+        if PY3:
+            response = input().strip()
+        else:
+            response = raw_input().strip()
+    return response
 
 
 def line_shortening_rank(candidate, newline, indent_word):
@@ -2291,8 +2378,7 @@ def main():
                 filenames = args[:1]
 
         output = codecs.getwriter('utf-8')(sys.stdout.buffer
-                                           if sys.version_info[0] >= 3
-                                           else sys.stdout)
+                                           if PY3 else sys.stdout)
 
         output = LineEndingWrapper(output)
 
