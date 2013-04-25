@@ -526,11 +526,12 @@ class FixPEP8(object):
         # Optimize for comma case. This will fix all commas in the full source
         # code in one pass.
         if ',' in result['info']:
+            orig_lines = len(self.source)
             original = ''.join(self.source)
             new = refactor(original, ['ws_comma'])
             if original.strip() != new.strip():
-                self.source = [new]
-                return range(1, 1 + len(original))
+                self.source = new.splitlines(True)
+                return range(1, 1 + orig_lines)
         else:
             line_index = result['line'] - 1
             target = self.source[line_index]
