@@ -1013,8 +1013,8 @@ def _get_indentation(line):
 def get_diff_text(old, new, filename):
     """Return text of unified diff between old and new."""
     if filename:
-        old_filename = 'original/' + filename
-        new_filename = 'fixed/' + filename
+        old_filename = os.path.join('original', filename)
+        new_filename = os.path.join('fixed', filename)
     else:
         old_filename = 'original.py'
         new_filename = 'fixed.py'
@@ -2135,13 +2135,13 @@ def supported_fixes():
     for attribute in dir(instance):
         code = re.match('fix_([ew][0-9][0-9][0-9])', attribute)
         if code:
-            code = code.group(1).upper()
+            code = code.group(1).upper().strip()
             desc = re.sub(r'\s+', ' ',
                           getattr(instance, attribute).__doc__)
             _supported_fixes[code] = desc
 
     for (code, function) in global_fixes():
-        code = code.upper() + (4 - len(code)) * ' '
+        code = code.upper()
         desc = re.sub(r'\s+', ' ', function.__doc__)
         _supported_fixes[code] = desc
 
@@ -2359,7 +2359,7 @@ def main():
 
         if options.list_fixes:
             for code, description in supported_fixes().items():
-                print('{code} - {description}'.format(
+                print('{code:<4} - {description}'.format(
                     code=code, description=description))
             return 0
 
